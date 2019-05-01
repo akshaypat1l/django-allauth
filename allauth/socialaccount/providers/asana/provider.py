@@ -1,3 +1,4 @@
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
 
@@ -19,4 +20,4 @@ class AsanaProvider(OAuth2Provider):
                     name=data.get('name'))
 
 
-provider_classes = [AsanaProvider]
+providers.registry.register(AsanaProvider)

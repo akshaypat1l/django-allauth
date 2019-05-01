@@ -1,5 +1,4 @@
-from django.conf.urls import include, url
-
+from django.conf.urls import url, include
 from allauth.utils import import_attribute
 
 
@@ -10,9 +9,9 @@ def default_urlpatterns(provider):
         provider.get_package() + '.views.oauth2_callback')
 
     urlpatterns = [
-        url(r'^login/$',
+        url('^login/$',
             login_view, name=provider.id + "_login"),
-        url(r'^login/callback/$',
+        url('^login/callback/$',
             callback_view, name=provider.id + "_callback"),
     ]
 

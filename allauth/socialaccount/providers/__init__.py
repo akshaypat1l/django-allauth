@@ -1,12 +1,11 @@
-import importlib
-from collections import OrderedDict
-
 from django.conf import settings
+
+from allauth.compat import importlib
 
 
 class ProviderRegistry(object):
     def __init__(self):
-        self.provider_map = OrderedDict()
+        self.provider_map = {}
         self.loaded = False
 
     def get_list(self, request=None):
@@ -36,18 +35,11 @@ class ProviderRegistry(object):
         # all of this really needs to be revisited.
         if not self.loaded:
             for app in settings.INSTALLED_APPS:
+                provider_module = app + '.provider'
                 try:
-                    provider_module = importlib.import_module(
-                        app + '.provider'
-                    )
+                    importlib.import_module(provider_module)
                 except ImportError:
                     pass
-                else:
-                    for cls in getattr(
-                        provider_module, 'provider_classes', []
-                    ):
-                        self.register(cls)
             self.loaded = True
-
 
 registry = ProviderRegistry()

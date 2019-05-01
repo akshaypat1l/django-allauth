@@ -1,5 +1,18 @@
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
+from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
+
+
+class BattleNetSocialAccountAdapter(DefaultSocialAccountAdapter):
+    def save_user(self, request, sociallogin, form=None):
+        user = super().save_user(request, sociallogin, form)
+
+        battletag = sociallogin.account.extra_data.get("battletag")
+        if battletag:
+            user.username = battletag
+            user.save()
+        return user
 
 
 class BattleNetAccount(ProviderAccount):
@@ -14,18 +27,13 @@ class BattleNetProvider(OAuth2Provider):
     account_class = BattleNetAccount
 
     def extract_uid(self, data):
-        uid = str(data["id"])
-        if data.get("region") == "cn":
-            # China is on a different account system. UIDs can clash with US.
-            return uid + "-cn"
-        return uid
+        return str(data["id"])
 
     def extract_common_fields(self, data):
-        return {"username": data.get("battletag")}
+        return {"battletag": data.get("battletag")}
 
     def get_default_scope(self):
         # Optional scopes: "sc2.profile", "wow.profile"
         return []
 
-
-provider_classes = [BattleNetProvider]
+providers.registry.register(BattleNetProvider)

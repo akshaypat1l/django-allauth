@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import OpenIDNonce, OpenIDStore
+from .models import OpenIDStore, OpenIDNonce
 
 
 class OpenIDStoreAdmin(admin.ModelAdmin):
@@ -9,7 +9,6 @@ class OpenIDStoreAdmin(admin.ModelAdmin):
 
 class OpenIDNonceAdmin(admin.ModelAdmin):
     pass
-
 
 admin.site.register(OpenIDStore, OpenIDStoreAdmin)
 admin.site.register(OpenIDNonce, OpenIDNonceAdmin)

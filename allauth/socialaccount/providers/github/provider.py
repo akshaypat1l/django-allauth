@@ -1,6 +1,7 @@
-from allauth.socialaccount import app_settings
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
+from allauth.socialaccount import app_settings
 
 
 class GitHubAccount(ProviderAccount):
@@ -43,4 +44,4 @@ class GitHubProvider(OAuth2Provider):
                     name=data.get('name'))
 
 
-provider_classes = [GitHubProvider]
+providers.registry.register(GitHubProvider)

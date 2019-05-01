@@ -1,74 +1,60 @@
+from django.core.urlresolvers import reverse, reverse_lazy
+from django.http import (HttpResponseRedirect, Http404,
+                         HttpResponsePermanentRedirect)
+from django.views.generic.base import TemplateResponseMixin, View, TemplateView
+from django.views.generic.edit import FormView
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.contrib.sites.shortcuts import get_current_site
-from django.http import (
-    Http404,
-    HttpResponsePermanentRedirect,
-    HttpResponseRedirect,
-)
+from django.contrib.auth import logout as auth_logout
 from django.shortcuts import redirect
-from django.urls import reverse, reverse_lazy
-from django.utils.decorators import method_decorator
 from django.views.decorators.debug import sensitive_post_parameters
-from django.views.generic.base import TemplateResponseMixin, TemplateView, View
-from django.views.generic.edit import FormView
+from django.utils.decorators import method_decorator
 
 from ..exceptions import ImmediateHttpResponse
-from ..utils import get_form_class, get_request_param
-from . import app_settings, signals
-from .adapter import get_adapter
+from ..utils import get_form_class, get_request_param, get_current_site
+
+from .utils import (get_next_redirect_url, complete_signup,
+                    get_login_redirect_url, perform_login,
+                    passthrough_next_redirect_url, url_str_to_user_pk,
+                    logout_on_password_change)
 from .forms import (
-    AddEmailForm,
-    ChangePasswordForm,
-    LoginForm,
-    ResetPasswordForm,
-    ResetPasswordKeyForm,
-    SetPasswordForm,
-    SignupForm,
-    UserTokenForm,
-)
+    AddEmailForm, ChangePasswordForm,
+    LoginForm, ResetPasswordKeyForm,
+    ResetPasswordForm, SetPasswordForm, SignupForm, UserTokenForm)
+from .utils import sync_user_email_addresses
 from .models import EmailAddress, EmailConfirmation, EmailConfirmationHMAC
-from .utils import (
-    complete_signup,
-    get_login_redirect_url,
-    get_next_redirect_url,
-    logout_on_password_change,
-    passthrough_next_redirect_url,
-    perform_login,
-    sync_user_email_addresses,
-    url_str_to_user_pk,
-)
 
+from . import signals
+from . import app_settings
 
-INTERNAL_RESET_URL_KEY = "set-password"
-INTERNAL_RESET_SESSION_KEY = "_password_reset_key"
+from .adapter import get_adapter
 
 
 sensitive_post_parameters_m = method_decorator(
     sensitive_post_parameters('password', 'password1', 'password2'))
 
 
-def _ajax_response(request, response, form=None, data=None):
-    adapter = get_adapter(request)
-    if adapter.is_ajax(request):
+def _ajax_response(request, response, form=None):
+    if request.is_ajax():
         if (isinstance(response, HttpResponseRedirect) or isinstance(
                 response, HttpResponsePermanentRedirect)):
             redirect_to = response['Location']
         else:
             redirect_to = None
-        response = adapter.ajax_response(
+        response = get_adapter(request).ajax_response(
             request,
             response,
             form=form,
-            data=data,
             redirect_to=redirect_to)
     return response
 
 
 class RedirectAuthenticatedUserMixin(object):
-
     def dispatch(self, request, *args, **kwargs):
-        if request.user.is_authenticated and \
+        # WORKAROUND: https://code.djangoproject.com/ticket/19316
+        self.request = request
+        # (end WORKAROUND)
+        if request.user.is_authenticated() and \
                 app_settings.AUTHENTICATED_LOGIN_REDIRECTS:
             redirect_to = self.get_authenticated_redirect_url()
             response = HttpResponseRedirect(redirect_to)
@@ -89,13 +75,6 @@ class RedirectAuthenticatedUserMixin(object):
 
 class AjaxCapableProcessFormViewMixin(object):
 
-    def get(self, request, *args, **kwargs):
-        response = super(AjaxCapableProcessFormViewMixin, self).get(
-            request, *args, **kwargs)
-        form = self.get_form()
-        return _ajax_response(
-            self.request, response, form=form, data=self._get_ajax_data_if())
-
     def post(self, request, *args, **kwargs):
         form_class = self.get_form_class()
         form = self.get_form(form_class)
@@ -103,25 +82,7 @@ class AjaxCapableProcessFormViewMixin(object):
             response = self.form_valid(form)
         else:
             response = self.form_invalid(form)
-        return _ajax_response(
-            self.request, response, form=form, data=self._get_ajax_data_if())
-
-    def get_form(self, form_class=None):
-        form = getattr(self, '_cached_form', None)
-        if form is None:
-            form = super(AjaxCapableProcessFormViewMixin, self).get_form(
-                form_class)
-            self._cached_form = form
-        return form
-
-    def _get_ajax_data_if(self):
-        return (
-            self.get_ajax_data()
-            if get_adapter(self.request).is_ajax(self.request)
-            else None)
-
-    def get_ajax_data(self):
-        return None
+        return _ajax_response(self.request, response, form=form)
 
 
 class LoginView(RedirectAuthenticatedUserMixin,
@@ -173,7 +134,6 @@ class LoginView(RedirectAuthenticatedUserMixin,
                     "redirect_field_value": redirect_field_value})
         return ret
 
-
 login = LoginView.as_view()
 
 
@@ -182,6 +142,9 @@ class CloseableSignupMixin(object):
         "account/signup_closed." + app_settings.TEMPLATE_EXTENSION)
 
     def dispatch(self, request, *args, **kwargs):
+        # WORKAROUND: https://code.djangoproject.com/ticket/19316
+        self.request = request
+        # (end WORKAROUND)
         try:
             if not self.is_open():
                 return self.closed()
@@ -240,12 +203,11 @@ class SignupView(RedirectAuthenticatedUserMixin, CloseableSignupMixin,
         ret = super(SignupView, self).get_context_data(**kwargs)
         form = ret['form']
         email = self.request.session.get('account_verified_email')
-        if email:
-            email_keys = ['email']
-            if app_settings.SIGNUP_EMAIL_ENTER_TWICE:
-                email_keys.append('email2')
-            for email_key in email_keys:
-                form.fields[email_key].initial = email
+        email_keys = ['email']
+        if app_settings.SIGNUP_EMAIL_ENTER_TWICE:
+            email_keys.append('email2')
+        for email_key in email_keys:
+            form.fields[email_key].initial = email
         login_url = passthrough_next_redirect_url(self.request,
                                                   reverse("account_login"),
                                                   self.redirect_field_name)
@@ -256,7 +218,6 @@ class SignupView(RedirectAuthenticatedUserMixin, CloseableSignupMixin,
                     "redirect_field_name": redirect_field_name,
                     "redirect_field_value": redirect_field_value})
         return ret
-
 
 signup = SignupView.as_view()
 
@@ -327,7 +288,7 @@ class ConfirmEmailView(TemplateResponseMixin, View):
         if user_pk_str:
             user_pk = url_str_to_user_pk(user_pk_str)
         user = confirmation.email_address.user
-        if user_pk == user.pk and self.request.user.is_anonymous:
+        if user_pk == user.pk and self.request.user.is_anonymous():
             return perform_login(self.request,
                                  user,
                                  app_settings.EmailVerificationMethod.NONE,
@@ -357,14 +318,11 @@ class ConfirmEmailView(TemplateResponseMixin, View):
     def get_context_data(self, **kwargs):
         ctx = kwargs
         ctx["confirmation"] = self.object
-        site = get_current_site(self.request)
-        ctx.update({'site': site})
         return ctx
 
     def get_redirect_url(self):
         return get_adapter(self.request).get_email_confirmation_redirect_url(
             self.request)
-
 
 confirm_email = ConfirmEmailView.as_view()
 
@@ -411,14 +369,14 @@ class EmailView(AjaxCapableProcessFormViewMixin, FormView):
                 res = self._action_remove(request)
             elif "action_primary" in request.POST:
                 res = self._action_primary(request)
-            res = res or HttpResponseRedirect(self.success_url)
+            res = res or HttpResponseRedirect(reverse('account_email'))
             # Given that we bypassed AjaxCapableProcessFormViewMixin,
             # we'll have to call invoke it manually...
-            res = _ajax_response(request, res, data=self._get_ajax_data_if())
+            res = _ajax_response(request, res)
         else:
             # No email address selected
-            res = HttpResponseRedirect(self.success_url)
-            res = _ajax_response(request, res, data=self._get_ajax_data_if())
+            res = HttpResponseRedirect(reverse('account_email'))
+            res = _ajax_response(request, res)
         return res
 
     def _action_send(self, request, *args, **kwargs):
@@ -517,18 +475,6 @@ class EmailView(AjaxCapableProcessFormViewMixin, FormView):
         # (end NOTE)
         return ret
 
-    def get_ajax_data(self):
-        data = []
-        for emailaddress in self.request.user.emailaddress_set.all():
-            data.append({
-                'id': emailaddress.pk,
-                'email': emailaddress.email,
-                'verified': emailaddress.verified,
-                'primary': emailaddress.primary,
-            })
-        return data
-
-
 email = login_required(EmailView.as_view())
 
 
@@ -545,14 +491,10 @@ class PasswordChangeView(AjaxCapableProcessFormViewMixin, FormView):
 
     @sensitive_post_parameters_m
     def dispatch(self, request, *args, **kwargs):
-        return super(PasswordChangeView, self).dispatch(
-            request, *args, **kwargs)
-
-    def render_to_response(self, context, **response_kwargs):
-        if not self.request.user.has_usable_password():
+        if not request.user.has_usable_password():
             return HttpResponseRedirect(reverse('account_set_password'))
-        return super(PasswordChangeView, self).render_to_response(
-            context, **response_kwargs)
+        return super(PasswordChangeView, self).dispatch(request, *args,
+                                                        **kwargs)
 
     def get_form_kwargs(self):
         kwargs = super(PasswordChangeView, self).get_form_kwargs()
@@ -578,7 +520,6 @@ class PasswordChangeView(AjaxCapableProcessFormViewMixin, FormView):
         # (end NOTE)
         return ret
 
-
 password_change = login_required(PasswordChangeView.as_view())
 
 
@@ -594,13 +535,9 @@ class PasswordSetView(AjaxCapableProcessFormViewMixin, FormView):
 
     @sensitive_post_parameters_m
     def dispatch(self, request, *args, **kwargs):
-        if self.request.user.has_usable_password():
+        if request.user.has_usable_password():
             return HttpResponseRedirect(reverse('account_change_password'))
         return super(PasswordSetView, self).dispatch(request, *args, **kwargs)
-
-    def render_to_response(self, context, **response_kwargs):
-        return super(PasswordSetView, self).render_to_response(
-            context, **response_kwargs)
 
     def get_form_kwargs(self):
         kwargs = super(PasswordSetView, self).get_form_kwargs()
@@ -624,7 +561,6 @@ class PasswordSetView(AjaxCapableProcessFormViewMixin, FormView):
         ret['password_set_form'] = ret.get('form')
         # (end NOTE)
         return ret
-
 
 password_set = login_required(PasswordSetView.as_view())
 
@@ -655,14 +591,12 @@ class PasswordResetView(AjaxCapableProcessFormViewMixin, FormView):
         ret.update({"login_url": login_url})
         return ret
 
-
 password_reset = PasswordResetView.as_view()
 
 
 class PasswordResetDoneView(TemplateView):
     template_name = (
         "account/password_reset_done." + app_settings.TEMPLATE_EXTENSION)
-
 
 password_reset_done = PasswordResetDoneView.as_view()
 
@@ -681,44 +615,21 @@ class PasswordResetFromKeyView(AjaxCapableProcessFormViewMixin, FormView):
     def dispatch(self, request, uidb36, key, **kwargs):
         self.request = request
         self.key = key
+        # (Ab)using forms here to be able to handle errors in XHR #890
+        token_form = UserTokenForm(data={'uidb36': uidb36, 'key': key})
 
-        if self.key == INTERNAL_RESET_URL_KEY:
-            self.key = self.request.session.get(INTERNAL_RESET_SESSION_KEY, '')
-            # (Ab)using forms here to be able to handle errors in XHR #890
-            token_form = UserTokenForm(
-                data={'uidb36': uidb36, 'key': self.key})
-            if token_form.is_valid():
-                self.reset_user = token_form.reset_user
-                return super(PasswordResetFromKeyView, self).dispatch(request,
-                                                                      uidb36,
-                                                                      self.key,
-                                                                      **kwargs)
+        if not token_form.is_valid():
+            self.reset_user = None
+            response = self.render_to_response(
+                self.get_context_data(token_fail=True)
+            )
+            return _ajax_response(self.request, response, form=token_form)
         else:
-            token_form = UserTokenForm(
-                data={'uidb36': uidb36, 'key': self.key})
-            if token_form.is_valid():
-                # Store the key in the session and redirect to the
-                # password reset form at a URL without the key. That
-                # avoids the possibility of leaking the key in the
-                # HTTP Referer header.
-                self.request.session[INTERNAL_RESET_SESSION_KEY] = self.key
-                redirect_url = self.request.path.replace(
-                    self.key, INTERNAL_RESET_URL_KEY)
-                return redirect(redirect_url)
-
-        self.reset_user = None
-        response = self.render_to_response(
-            self.get_context_data(token_fail=True)
-        )
-        return _ajax_response(self.request, response, form=token_form)
-
-    def get_context_data(self, **kwargs):
-        ret = super(PasswordResetFromKeyView, self).get_context_data(**kwargs)
-        ret['action_url'] = reverse(
-            'account_reset_password_from_key',
-            kwargs={'uidb36': self.kwargs['uidb36'],
-                    'key': self.kwargs['key']})
-        return ret
+            self.reset_user = token_form.reset_user
+            return super(PasswordResetFromKeyView, self).dispatch(request,
+                                                                  uidb36,
+                                                                  key,
+                                                                  **kwargs)
 
     def get_form_kwargs(self):
         kwargs = super(PasswordResetFromKeyView, self).get_form_kwargs()
@@ -743,7 +654,6 @@ class PasswordResetFromKeyView(AjaxCapableProcessFormViewMixin, FormView):
 
         return super(PasswordResetFromKeyView, self).form_valid(form)
 
-
 password_reset_from_key = PasswordResetFromKeyView.as_view()
 
 
@@ -751,7 +661,6 @@ class PasswordResetFromKeyDoneView(TemplateView):
     template_name = (
         "account/password_reset_from_key_done." +
         app_settings.TEMPLATE_EXTENSION)
-
 
 password_reset_from_key_done = PasswordResetFromKeyDoneView.as_view()
 
@@ -764,27 +673,23 @@ class LogoutView(TemplateResponseMixin, View):
     def get(self, *args, **kwargs):
         if app_settings.LOGOUT_ON_GET:
             return self.post(*args, **kwargs)
-        if not self.request.user.is_authenticated:
-            response = redirect(self.get_redirect_url())
-            return _ajax_response(self.request, response)
+        if not self.request.user.is_authenticated():
+            return redirect(self.get_redirect_url())
         ctx = self.get_context_data()
-        response = self.render_to_response(ctx)
-        return _ajax_response(self.request, response)
+        return self.render_to_response(ctx)
 
     def post(self, *args, **kwargs):
         url = self.get_redirect_url()
-        if self.request.user.is_authenticated:
+        if self.request.user.is_authenticated():
             self.logout()
-        response = redirect(url)
-        return _ajax_response(self.request, response)
+        return redirect(url)
 
     def logout(self):
-        adapter = get_adapter(self.request)
-        adapter.add_message(
+        get_adapter(self.request).add_message(
             self.request,
             messages.SUCCESS,
             'account/messages/logged_out.txt')
-        adapter.logout(self.request)
+        auth_logout(self.request)
 
     def get_context_data(self, **kwargs):
         ctx = kwargs
@@ -803,7 +708,6 @@ class LogoutView(TemplateResponseMixin, View):
                     self.request).get_logout_redirect_url(
                         self.request))
 
-
 logout = LogoutView.as_view()
 
 
@@ -811,13 +715,11 @@ class AccountInactiveView(TemplateView):
     template_name = (
         'account/account_inactive.' + app_settings.TEMPLATE_EXTENSION)
 
-
 account_inactive = AccountInactiveView.as_view()
 
 
 class EmailVerificationSentView(TemplateView):
     template_name = (
         'account/verification_sent.' + app_settings.TEMPLATE_EXTENSION)
-
 
 email_verification_sent = EmailVerificationSentView.as_view()

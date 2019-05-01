@@ -51,7 +51,7 @@ class AppSettings(object):
         """
         from django.conf import settings
         return self._setting("EMAIL_CONFIRMATION_EXPIRE_DAYS",
-                             getattr(settings, "EMAIL_CONFIRMATION_DAYS", 3))
+                             getattr(settings, "EMAIL_CONFIRMATION_DAYS", 10))
 
     @property
     def EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL(self):
@@ -71,14 +71,6 @@ class AppSettings(object):
         from django.conf import settings
         return self._setting("EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL",
                              settings.LOGIN_URL)
-
-    @property
-    def EMAIL_CONFIRMATION_COOLDOWN(self):
-        """
-        The cooldown in seconds during which, after an email confirmation has
-        been sent, a second confirmation email will not be sent.
-        """
-        return self._setting("EMAIL_CONFIRMATION_COOLDOWN", 3 * 60)
 
     @property
     def EMAIL_REQUIRED(self):
@@ -103,8 +95,19 @@ class AppSettings(object):
 
     @property
     def AUTHENTICATION_METHOD(self):
-        ret = self._setting("AUTHENTICATION_METHOD",
-                            self.AuthenticationMethod.USERNAME)
+        from django.conf import settings
+        if hasattr(settings, "ACCOUNT_EMAIL_AUTHENTICATION"):
+            import warnings
+            warnings.warn("ACCOUNT_EMAIL_AUTHENTICATION is deprecated,"
+                          " use ACCOUNT_AUTHENTICATION_METHOD",
+                          DeprecationWarning)
+            if getattr(settings, "ACCOUNT_EMAIL_AUTHENTICATION"):
+                ret = self.AuthenticationMethod.EMAIL
+            else:
+                ret = self.AuthenticationMethod.USERNAME
+        else:
+            ret = self._setting("AUTHENTICATION_METHOD",
+                                self.AuthenticationMethod.USERNAME)
         return ret
 
     @property
@@ -141,9 +144,13 @@ class AppSettings(object):
         """
         Minimum password Length
         """
+        import django
         from django.conf import settings
         ret = None
-        if not settings.AUTH_PASSWORD_VALIDATORS:
+        has_validators = (
+            django.VERSION[:2] >= (1, 9) and
+            bool(getattr(settings, 'AUTH_PASSWORD_VALIDATORS', [])))
+        if not has_validators:
             ret = self._setting("PASSWORD_MIN_LENGTH", 6)
         return ret
 
@@ -291,36 +298,9 @@ class AppSettings(object):
     def SALT(self):
         return self._setting('SALT', 'account')
 
-    @property
-    def PRESERVE_USERNAME_CASING(self):
-        return self._setting('PRESERVE_USERNAME_CASING', True)
-
-    @property
-    def USERNAME_VALIDATORS(self):
-        from django.core.exceptions import ImproperlyConfigured
-        from allauth.utils import import_attribute
-        from allauth.utils import get_user_model
-
-        path = self._setting('USERNAME_VALIDATORS', None)
-        if path:
-            ret = import_attribute(path)
-            if not isinstance(ret, list):
-                raise ImproperlyConfigured(
-                    'ACCOUNT_USERNAME_VALIDATORS is expected to be a list')
-        else:
-            if self.USER_MODEL_USERNAME_FIELD is not None:
-                ret = get_user_model()._meta.get_field(
-                    self.USER_MODEL_USERNAME_FIELD).validators
-            else:
-                ret = []
-        return ret
-
-
 # Ugly? Guido recommends this himself ...
 # http://mail.python.org/pipermail/python-ideas/2012-May/014969.html
 import sys  # noqa
-
-
 app_settings = AppSettings('ACCOUNT_')
 app_settings.__name__ = __name__
 sys.modules[__name__] = app_settings

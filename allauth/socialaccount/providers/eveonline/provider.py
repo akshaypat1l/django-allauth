@@ -1,6 +1,7 @@
-from allauth.socialaccount.app_settings import STORE_TOKENS
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
+from allauth.socialaccount.app_settings import STORE_TOKENS
 
 
 class EveOnlineAccount(ProviderAccount):
@@ -44,4 +45,4 @@ class EveOnlineProvider(OAuth2Provider):
         return dict(name=data.get('CharacterName'))
 
 
-provider_classes = [EveOnlineProvider]
+providers.registry.register(EveOnlineProvider)

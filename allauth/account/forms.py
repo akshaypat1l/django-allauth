@@ -1,56 +1,32 @@
 from __future__ import absolute_import
 
 import warnings
-from importlib import import_module
 
 from django import forms
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.contrib.sites.shortcuts import get_current_site
-from django.core import exceptions, validators
-from django.urls import reverse
-from django.utils.translation import pgettext
+from django.core.urlresolvers import reverse
+from django.core import exceptions
+from django.utils.translation import pgettext, ugettext_lazy as _, ugettext
+from django.core import validators
+from django.contrib.auth.tokens import default_token_generator
 
-from allauth.compat import ugettext, ugettext_lazy as _
+from ..utils import (set_form_field_order,
+                     build_absolute_uri,
+                     get_username_max_length,
+                     get_current_site)
 
-from ..utils import (
-    build_absolute_uri,
-    get_username_max_length,
-    set_form_field_order,
-)
+from .models import EmailAddress
+from .utils import (perform_login, setup_user_email, url_str_to_user_pk,
+                    user_username, user_pk_to_url_str, filter_users_by_email,
+                    get_user_model,
+                    user_email)
+from .app_settings import AuthenticationMethod
 from . import app_settings
 from .adapter import get_adapter
-from .app_settings import AuthenticationMethod
-from .models import EmailAddress
-from .utils import (
-    filter_users_by_email,
-    get_user_model,
-    perform_login,
-    setup_user_email,
-    sync_user_email_addresses,
-    url_str_to_user_pk,
-    user_email,
-    user_pk_to_url_str,
-    user_username,
-)
 
-
-class EmailAwarePasswordResetTokenGenerator(PasswordResetTokenGenerator):
-
-    def _make_hash_value(self, user, timestamp):
-        ret = super(
-            EmailAwarePasswordResetTokenGenerator, self)._make_hash_value(
-                user, timestamp)
-        sync_user_email_addresses(user)
-        emails = set([user.email] if user.email else [])
-        emails.update(
-            EmailAddress.objects
-            .filter(user=user)
-            .values_list('email', flat=True))
-        ret += '|'.join(sorted(emails))
-        return ret
-
-
-default_token_generator = EmailAwarePasswordResetTokenGenerator()
+try:
+    from importlib import import_module
+except ImportError:
+    from django.utils.importlib import import_module
 
 
 class PasswordVerificationMixin(object):
@@ -72,7 +48,7 @@ class PasswordField(forms.CharField):
                                   app_settings.PASSWORD_INPUT_RENDER_VALUE)
         kwargs['widget'] = forms.PasswordInput(render_value=render_value,
                                                attrs={'placeholder':
-                                                      kwargs.get("label")})
+                                                      _(kwargs.get("label"))})
         super(PasswordField, self).__init__(*args, **kwargs)
 
 
@@ -104,6 +80,9 @@ class LoginForm(forms.Form):
 
         'username_password_mismatch':
         _("The username and/or password you specified are not correct."),
+
+        'username_email_password_mismatch':
+        _("The login and/or password you specified are not correct.")
     }
 
     def __init__(self, *args, **kwargs):
@@ -135,7 +114,7 @@ class LoginForm(forms.Form):
                                                          "Login"),
                                           widget=login_widget)
         self.fields["login"] = login_field
-        set_form_field_order(self, ["login", "password", "remember"])
+        set_form_field_order(self,  ["login", "password", "remember"])
         if app_settings.SESSION_REMEMBER is not None:
             del self.fields['remember']
 
@@ -153,7 +132,7 @@ class LoginForm(forms.Form):
                 AuthenticationMethod.USERNAME):
             credentials["username"] = login
         else:
-            if self._is_login_email(login):
+            if "@" in login and "." in login:
                 credentials["email"] = login
             credentials["username"] = login
         credentials["password"] = self.cleaned_data["password"]
@@ -162,14 +141,6 @@ class LoginForm(forms.Form):
     def clean_login(self):
         login = self.cleaned_data['login']
         return login.strip()
-
-    def _is_login_email(self, login):
-        try:
-            validators.validate_email(login)
-            ret = True
-        except exceptions.ValidationError:
-            ret = False
-        return ret
 
     def clean(self):
         super(LoginForm, self).clean()
@@ -182,15 +153,10 @@ class LoginForm(forms.Form):
         if user:
             self.user = user
         else:
-            auth_method = app_settings.AUTHENTICATION_METHOD
-            if auth_method == app_settings.AuthenticationMethod.USERNAME_EMAIL:
-                login = self.cleaned_data['login']
-                if self._is_login_email(login):
-                    auth_method = app_settings.AuthenticationMethod.EMAIL
-                else:
-                    auth_method = app_settings.AuthenticationMethod.USERNAME
             raise forms.ValidationError(
-                self.error_messages['%s_password_mismatch' % auth_method])
+                self.error_messages[
+                    '%s_password_mismatch'
+                    % app_settings.AUTHENTICATION_METHOD])
         return self.cleaned_data
 
     def login(self, request, redirect_url=None):
@@ -282,16 +248,11 @@ class BaseSignupForm(_base_signup_form_class()):
         username_field.widget.attrs['maxlength'] = str(
             username_field.max_length)
 
-        default_field_order = [
-            'email',
-            'email2',  # ignored when not present
-            'username',
-            'password1',
-            'password2'  # ignored when not present
-        ]
+        # field order may contain additional fields from our base class,
+        # so take proper care when reordering...
+        field_order = ['email', 'username']
         if app_settings.SIGNUP_EMAIL_ENTER_TWICE:
             self.fields["email2"] = forms.EmailField(
-                label=_("E-mail (again)"),
                 widget=forms.TextInput(
                     attrs={
                         'type': 'email',
@@ -299,6 +260,8 @@ class BaseSignupForm(_base_signup_form_class()):
                     }
                 )
             )
+            field_order = ['email', 'email2', 'username']
+        merged_field_order = list(self.fields.keys())
         if email_required:
             self.fields['email'].label = ugettext("E-mail")
             self.fields['email'].required = True
@@ -307,20 +270,21 @@ class BaseSignupForm(_base_signup_form_class()):
             self.fields['email'].required = False
             self.fields['email'].widget.is_required = False
             if self.username_required:
-                default_field_order = [
-                    'username',
-                    'email',
-                    'email2',  # ignored when not present
-                    'password1',
-                    'password2'  # ignored when not present
-                ]
+                field_order = ['username', 'email']
+                if app_settings.SIGNUP_EMAIL_ENTER_TWICE:
+                    field_order.append('email2')
 
+        # Merge our email and username fields in if they are not
+        # currently in the order.  This is to allow others to
+        # re-arrange email and username if they desire.  Go in reverse
+        # so that we make sure the inserted items are always
+        # prepended.
+        for field in reversed(field_order):
+            if field not in merged_field_order:
+                merged_field_order.insert(0, field)
+        set_form_field_order(self, merged_field_order)
         if not self.username_required:
             del self.fields["username"]
-
-        set_form_field_order(
-            self,
-            getattr(self, 'field_order', None) or default_field_order)
 
     def clean_username(self):
         value = self.cleaned_data["username"]
@@ -362,20 +326,19 @@ class BaseSignupForm(_base_signup_form_class()):
 
 
 class SignupForm(BaseSignupForm):
+
+    password1 = PasswordField(label=_("Password"))
+    password2 = PasswordField(label=_("Password (again)"))
+
     def __init__(self, *args, **kwargs):
         super(SignupForm, self).__init__(*args, **kwargs)
-        self.fields['password1'] = PasswordField(label=_("Password"))
-        if app_settings.SIGNUP_PASSWORD_ENTER_TWICE:
-            self.fields['password2'] = PasswordField(
-                label=_("Password (again)"))
-
-        if hasattr(self, 'field_order'):
-            set_form_field_order(self, self.field_order)
+        if not app_settings.SIGNUP_PASSWORD_ENTER_TWICE:
+            del self.fields["password2"]
 
     def clean(self):
         super(SignupForm, self).clean()
 
-        # `password` cannot be of type `SetPasswordField`, as we don't
+        # `password` cannot by of type `SetPasswordField`, as we don't
         # have a `User` yet. So, let's populate a dummy user to be used
         # for password validaton.
         dummy_user = get_user_model()
@@ -495,8 +458,8 @@ class ResetPasswordForm(forms.Form):
             "type": "email",
             "size": "30",
             "placeholder": _("E-mail address"),
-        })
-    )
+            })
+        )
 
     def clean_email(self):
         email = self.cleaned_data["email"]
@@ -513,6 +476,11 @@ class ResetPasswordForm(forms.Form):
         token_generator = kwargs.get("token_generator",
                                      default_token_generator)
 
+        def deprecated_site():
+            warnings.warn("Context variable `site` deprecated, use"
+                          "`current_site` instead", DeprecationWarning)
+            return current_site
+
         for user in self.users:
 
             temp_key = token_generator.make_token(user)
@@ -528,7 +496,8 @@ class ResetPasswordForm(forms.Form):
             url = build_absolute_uri(
                 request, path)
 
-            context = {"current_site": current_site,
+            context = {"site": deprecated_site,
+                       "current_site": current_site,
                        "user": user,
                        "password_reset_url": url,
                        "request": request}
@@ -581,11 +550,8 @@ class UserTokenForm(forms.Form):
     def clean(self):
         cleaned_data = super(UserTokenForm, self).clean()
 
-        uidb36 = cleaned_data.get('uidb36', None)
-        key = cleaned_data.get('key', None)
-
-        if not key:
-            raise forms.ValidationError(self.error_messages['token_invalid'])
+        uidb36 = cleaned_data['uidb36']
+        key = cleaned_data['key']
 
         self.reset_user = self._get_user(uidb36)
         if (self.reset_user is None or

@@ -1,6 +1,7 @@
-from allauth.account.models import EmailAddress
-from allauth.compat import python_2_unicode_compatible
+from django.utils.encoding import python_2_unicode_compatible
+
 from allauth.socialaccount import app_settings
+from allauth.account.models import EmailAddress
 
 from ..adapter import get_adapter
 
@@ -20,10 +21,6 @@ class AuthError(object):
     UNKNOWN = 'unknown'
     CANCELLED = 'cancelled'  # Cancelled on request of user
     DENIED = 'denied'  # Denied by server
-
-
-class ProviderException(Exception):
-    pass
 
 
 class Provider(object):
@@ -147,7 +144,7 @@ class Provider(object):
         """
         For example:
 
-        [EmailAddress(email='john@example.com',
+        [EmailAddress(email='john@doe.org',
                       verified=True,
                       primary=True)]
         """

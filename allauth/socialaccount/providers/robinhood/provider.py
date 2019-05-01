@@ -1,3 +1,4 @@
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
 
@@ -26,5 +27,4 @@ class RobinhoodProvider(OAuth2Provider):
     def extract_common_fields(self, data):
         return dict(username=data.get('username'))
 
-
-provider_classes = [RobinhoodProvider]
+providers.registry.register(RobinhoodProvider)

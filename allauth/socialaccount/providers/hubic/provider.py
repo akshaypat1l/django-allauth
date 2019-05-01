@@ -1,3 +1,4 @@
+from allauth.socialaccount import providers
 from allauth.socialaccount.providers.base import ProviderAccount
 from allauth.socialaccount.providers.oauth2.provider import OAuth2Provider
 
@@ -22,5 +23,4 @@ class HubicProvider(OAuth2Provider):
             first_name=data.get('firstname'),
             last_name=data.get('lastname'))
 
-
-provider_classes = [HubicProvider]
+providers.registry.register(HubicProvider)
