@@ -125,6 +125,13 @@ class AppSettings(object):
         return self._setting("UNIQUE_EMAIL", True)
 
     @property
+    def DOMAIN_NAME(self):
+        """
+        Fetch Domain name from settings
+        """
+        return self._setting("DOMAIN_NAME","https://www.repicture.com/")
+
+    @property
     def SIGNUP_EMAIL_ENTER_TWICE(self):
         """
         Signup email verification

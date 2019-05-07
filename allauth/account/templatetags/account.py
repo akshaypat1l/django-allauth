@@ -49,7 +49,10 @@ def do_user_display(parser, token):
             "'%s' takes either two or four arguments" % bits[0])
 
     return UserDisplayNode(user, as_var)
-#from .app_settings import get_domain_name
-#@register.tag(name='domain_name')
-#def display_domain_name()
-#    return get_domain_name()
+
+
+from .app_settings import DOMAIN_NAME
+
+@register.tag(name='domain_name')
+def display_domain_name()
+    return DOMAIN_NAME
