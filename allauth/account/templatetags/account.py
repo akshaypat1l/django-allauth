@@ -1,7 +1,7 @@
 from django import template
 
 from allauth.account.utils import user_display
-
+from allauth.account.app_settings import DOMAIN_NAME
 register = template.Library()
 
 
@@ -51,8 +51,8 @@ def do_user_display(parser, token):
     return UserDisplayNode(user, as_var)
 
 
-from .app_settings import DOMAIN_NAME
+#from .app_settings import DOMAIN_NAME
 
 @register.tag(name='domain_name')
-def display_domain_name()
+def display_domain_name():
     return DOMAIN_NAME
