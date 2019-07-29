@@ -20,6 +20,7 @@ try:
 except ImportError:
     from django.utils.encoding import force_unicode as force_text
 from allauth.compat import importlib
+from . import app_settings
 
 
 def _generate_unique_username_base(txts, regex=None):
@@ -234,9 +235,10 @@ def build_absolute_uri(request, location, protocol=None):
     the case where request is None.
     """
     from .account import app_settings as account_settings
+    
     if 'HTTP_HOST' in request.META:
         request.META.pop('HTTP_HOST')
-        request.META['HTTP_HOST']= "beta.mycivilworld.com"
+        request.META['HTTP_HOST']= app_settings.DOMAIN_NAME
     if request is None:
         site = get_current_site()
         bits = urlsplit(location)
