@@ -51,7 +51,7 @@ class AppSettings(object):
         """
         from django.conf import settings
         return self._setting("EMAIL_CONFIRMATION_EXPIRE_DAYS",
-                             getattr(settings, "EMAIL_CONFIRMATION_DAYS", 10))
+                             getattr(settings, "EMAIL_CONFIRMATION_DAYS", 21))
 
     @property
     def EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL(self):
